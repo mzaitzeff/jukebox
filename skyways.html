@@ -396,8 +396,30 @@ function fire(e, when) {
   }
 }
 
+/* iOS mutes Web Audio when the ring/silent switch is on silent; playing a
+   real media element promotes the audio session to 'playback', which is exempt. */
+let unmuteEl = null;
+function iosUnmute() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  if (!unmuteEl) {
+    const rate = 8000, n = rate / 2, len = 44 + n, b = new DataView(new ArrayBuffer(len));
+    const ws = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, 'RIFF'); b.setUint32(4, len - 8, true); ws(8, 'WAVE'); ws(12, 'fmt ');
+    b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+    b.setUint32(24, rate, true); b.setUint32(28, rate, true); b.setUint16(32, 1, true); b.setUint16(34, 8, true);
+    ws(36, 'data'); b.setUint32(40, n, true);
+    for (let i = 0; i < n; i++) b.setUint8(44 + i, 128);   // 8-bit silence
+    unmuteEl = document.createElement('audio');
+    unmuteEl.src = URL.createObjectURL(new Blob([b.buffer], { type: 'audio/wav' }));
+    unmuteEl.setAttribute('playsinline', '');
+    unmuteEl.loop = true;
+  }
+  unmuteEl.play().catch(() => {});
+}
+
 function play() {
   if (!ctx) initAudio();
+  iosUnmute();
   ctx.resume();
   playing = true;
   startTime = ctx.currentTime + 0.1;
@@ -409,6 +431,7 @@ function stop() {
   playing = false;
   clearInterval(schedTimer);
   if (ctx) ctx.suspend();
+  if (unmuteEl) unmuteEl.pause();
   document.body.classList.remove('playing');
 }
 document.getElementById('playBtn').addEventListener('click', e => { e.stopPropagation(); play(); });
