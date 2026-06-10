@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Afterglow — a little loop</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #06070f; overflow: hidden; font-family: Georgia, 'Times New Roman', serif; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #ui {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    color: #dfe6ff; text-align: center; pointer-events: none;
+    transition: opacity 1.2s ease;
+  }
+  #title { font-size: clamp(34px, 6vw, 64px); letter-spacing: 0.18em; font-weight: 400; text-shadow: 0 0 40px rgba(140,160,255,0.5); }
+  #subtitle { font-size: clamp(13px, 2vw, 17px); letter-spacing: 0.3em; opacity: 0.65; text-transform: uppercase; }
+  #playBtn {
+    pointer-events: auto; cursor: pointer; margin-top: 26px;
+    width: 86px; height: 86px; border-radius: 50%;
+    border: 1px solid rgba(190,200,255,0.45); background: rgba(120,140,255,0.08);
+    backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center;
+    transition: transform .25s ease, background .25s ease, box-shadow .25s ease;
+    box-shadow: 0 0 30px rgba(120,140,255,0.18);
+  }
+  #playBtn:hover { transform: scale(1.07); background: rgba(120,140,255,0.16); box-shadow: 0 0 50px rgba(120,140,255,0.35); }
+  #playBtn svg { width: 30px; height: 30px; fill: #dfe6ff; }
+  #hint { font-size: 12px; letter-spacing: 0.2em; opacity: 0.4; text-transform: uppercase; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 22px; display: flex;
+    flex-direction: column; align-items: center; gap: 10px;
+    color: #aeb8e8; opacity: 0; transition: opacity 1.5s ease; pointer-events: none;
+  }
+  #section { font-size: 12px; letter-spacing: 0.45em; text-transform: uppercase; opacity: 0.75; }
+  #bar { width: min(420px, 70vw); height: 2px; background: rgba(170,185,255,0.15); border-radius: 2px; overflow: hidden; }
+  #barFill { height: 100%; width: 0%; background: linear-gradient(90deg, #7f9bff, #cfa9ff); }
+  #loopCount { font-size: 11px; letter-spacing: 0.3em; opacity: 0.45; text-transform: uppercase; }
+  body.playing #ui { opacity: 0; pointer-events: none; }
+  body.playing #hud { opacity: 1; }
+  #pauseHit { position: fixed; inset: 0; display: none; }
+  body.playing #pauseHit { display: block; }
+  #nav {
+    position: fixed; top: 18px; right: 22px; z-index: 10;
+  }
+  #nav a {
+    color: #aeb8e8; text-decoration: none; font-size: 12px; letter-spacing: 0.25em;
+    text-transform: uppercase; opacity: 0.55; transition: opacity .25s ease;
+    padding: 8px 12px; border: 1px solid rgba(170,185,255,0.25); border-radius: 20px;
+    background: rgba(10,12,30,0.4); backdrop-filter: blur(4px);
+  }
+  #nav a:hover { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="pauseHit"></div>
+<div id="nav"><a href="skyways.html">next track: skyways '55 &#9656;</a></div>
+<div id="ui">
+  <div id="title">A F T E R G L O W</div>
+  <div id="subtitle">an emotional little piano loop · for misha</div>
+  <div id="playBtn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+  <div id="hint">headphones recommended · tap anywhere to pause</div>
+</div>
+<div id="hud">
+  <div id="section">intro</div>
+  <div id="bar"><div id="barFill"></div></div>
+  <div id="loopCount"></div>
+</div>
+
+<script>
+/* =====================================================================
+   AFTERGLOW — generative emotional piano loop, "See You Again" energy.
+   80 BPM · Am–F–C–G · 32-bar seamless loop (96 s)
+   ===================================================================== */
+
+const BPM = 80;
+const SPB = 60 / BPM;            // seconds per beat
+const BEATS_PER_BAR = 4;
+const LOOP_BARS = 32;
+const LOOP_BEATS = LOOP_BARS * BEATS_PER_BAR;   // 128
+const LOOP_SECONDS = LOOP_BEATS * SPB;          // 96 s
+
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+/* ------------------------- THE SCORE ------------------------------ */
+// midi helpers
+const N = { A2:45, B2:47, C3:48, D3:50, E3:52, F3:53, G3:55, A3:57, B3:59,
+            C4:60, D4:62, E4:64, F4:65, G4:67, A4:69, B4:71,
+            C5:72, D5:74, E5:76, F5:77, G5:79, A5:81, B5:83, C6:84, D6:86, E6:88,
+            F2:41, G2:43, E2:40 };
+
+// 4-bar chord cycle: Am, F, C, G
+const CHORDS = [
+  { root: N.A2, arp: [N.A2, N.E3, N.A3, N.C4, N.E4, N.C4, N.A3, N.E3], pad: [N.A3, N.C4, N.E4] },
+  { root: N.F2, arp: [N.F2, N.C3, N.F3, N.A3, N.C4, N.A3, N.F3, N.C3], pad: [N.A3, N.C4, N.F4] },
+  { root: N.C3, arp: [N.C3, N.G3, N.C4, N.E4, N.G4, N.E4, N.C4, N.G3], pad: [N.G3, N.C4, N.E4] },
+  { root: N.G2, arp: [N.G2, N.D3, N.G3, N.B3, N.D4, N.B3, N.G3, N.D3], pad: [N.G3, N.B3, N.D4] },
+];
+
+// THE HOOK — a 4-bar phrase (t in beats within the 4-bar cycle, d in beats)
+const HOOK = [
+  // bar 1 (Am) — pickup figure climbing to the high note
+  { t: 0.0, n: N.E5, d: 0.5 }, { t: 0.5, n: N.G5, d: 0.5 },
+  { t: 1.0, n: N.A5, d: 1.5 },
+  { t: 2.5, n: N.G5, d: 0.5 }, { t: 3.0, n: N.E5, d: 0.5 }, { t: 3.5, n: N.D5, d: 0.5 },
+  // bar 2 (F) — sighing answer
+  { t: 4.0, n: N.C5, d: 1.5 }, { t: 5.5, n: N.D5, d: 0.5 },
+  { t: 6.0, n: N.E5, d: 1.0 }, { t: 7.0, n: N.D5, d: 0.5 }, { t: 7.5, n: N.C5, d: 0.5 },
+  // bar 3 (C) — lift, higher this time
+  { t: 8.0, n: N.E5, d: 0.5 }, { t: 8.5, n: N.G5, d: 0.5 },
+  { t: 9.0, n: N.C6, d: 1.5 },
+  { t: 10.5, n: N.B5, d: 0.5 }, { t: 11.0, n: N.G5, d: 0.5 }, { t: 11.5, n: N.A5, d: 0.5 },
+  // bar 4 (G) — falling home, lands so it leads straight back into bar 1
+  { t: 12.0, n: N.A5, d: 0.5 }, { t: 12.5, n: N.G5, d: 0.5 },
+  { t: 13.0, n: N.D5, d: 1.0 }, { t: 14.0, n: N.E5, d: 2.0 },
+];
+
+// alternate ending for the 4th bar (used every second cycle) — resolves down
+const HOOK_ALT_TAIL = [
+  { t: 12.0, n: N.B4, d: 0.5 }, { t: 12.5, n: N.D5, d: 0.5 },
+  { t: 13.0, n: N.G5, d: 1.0 }, { t: 14.0, n: N.E5, d: 1.0 }, { t: 15.0, n: N.D5, d: 1.0 },
+];
+
+function hookForCycle(alt) {
+  if (!alt) return HOOK;
+  return HOOK.filter(e => e.t < 12).concat(HOOK_ALT_TAIL);
+}
+
+// thirds-below harmony for a melody note (diatonic-ish in A minor)
+const HARM = { 76:72, 79:76, 81:77, 74:71, 72:69, 83:79, 84:81, 71:67 };
+
+/* Build the full 32-bar event list. */
+function buildScore() {
+  const ev = [];
+  const push = (t, type, o) => ev.push(Object.assign({ t, type }, o));
+
+  for (let bar = 0; bar < LOOP_BARS; bar++) {
+    const t0 = bar * BEATS_PER_BAR;
+    const ch = CHORDS[bar % 4];
+    const cycle = Math.floor(bar / 4);          // 0..7 — which pass through Am-F-C-G
+    const section = Math.floor(bar / 8);        // 0 intro, 1 bloom, 2 full, 3 fade
+    const altTail = cycle % 2 === 1;
+
+    /* --- melody hook: present in every cycle, register/voicing varies --- */
+    if (bar % 4 === 0) {
+      const phrase = hookForCycle(altTail);
+      for (const e of phrase) {
+        const vel = section === 0 ? 0.92 : section === 1 ? 0.95 : section === 2 ? 1.0 : 0.85;
+        push(t0 + e.t, 'mel', { n: e.n, d: e.d, v: vel });
+        // harmonized thirds in bloom + full sections
+        if ((section === 1 && e.t >= 8) || section === 2) {
+          const h = HARM[e.n];
+          if (h) push(t0 + e.t, 'mel', { n: h, d: e.d, v: vel * 0.45 });
+        }
+        // sparkling upper octave in the full section, only on long notes
+        if (section === 2 && e.d >= 1.5) {
+          push(t0 + e.t, 'mel', { n: e.n + 12, d: e.d, v: 0.22 });
+        }
+      }
+    }
+
+    /* --- left hand --- */
+    if (section === 0 && bar < 4) {
+      // first pass: just deep lonely roots under the naked hook
+      push(t0, 'piano', { n: ch.root, d: 4, v: 0.55 });
+      push(t0, 'piano', { n: ch.root + 12, d: 4, v: 0.3 });
+    } else {
+      // flowing 8th-note arpeggios
+      ch.arp.forEach((n, i) => {
+        const v = (i === 0 ? 0.62 : 0.34) * (section === 3 ? 0.8 : 1);
+        push(t0 + i * 0.5, 'piano', { n, d: 0.62, v });
+      });
+    }
+
+    /* --- pad & bass from section 1 on (pad lingers into the fade) --- */
+    if (section >= 1) {
+      push(t0, 'pad', { ns: ch.pad, d: 4.05, v: section === 2 ? 0.16 : 0.11 });
+      if (section <= 2) push(t0, 'bass', { n: ch.root - 12 < 24 ? ch.root : ch.root - 12, d: 3.9, v: section === 2 ? 0.5 : 0.36 });
+    }
+
+    /* --- heartbeat percussion, only in the full section --- */
+    if (section === 2) {
+      push(t0 + 0,   'kick', { v: 0.85 });
+      push(t0 + 2,   'kick', { v: 0.6 });
+      push(t0 + 2.75,'kick', { v: 0.35 });
+      push(t0 + 1, 'snap', { v: 0.5 });
+      push(t0 + 3, 'snap', { v: 0.5 });
+      for (let h = 0; h < 8; h++) push(t0 + h * 0.5, 'hat', { v: h % 2 ? 0.10 : 0.16 });
+    }
+    // a single soft kick heartbeat leads the fade section
+    if (section === 3 && bar % 2 === 0) push(t0, 'kick', { v: 0.3 });
+  }
+
+  ev.sort((a, b) => a.t - b.t);
+  return ev;
+}
+
+const SCORE = buildScore();
+const SECTION_NAMES = ['intro · just the hook', 'bloom', 'full heart', 'afterglow'];
+
+/* ----------------------- AUDIO ENGINE ----------------------------- */
+let ctx = null, master, reverb, reverbGain, comp;
+let playing = false, startTime = 0, nextIdx = 0, loopOffset = 0, loopsDone = 0;
+let schedTimer = null;
+const visualQueue = [];   // { when, kind, n }
+
+function makeImpulse(c, seconds, decay) {
+  const rate = c.sampleRate, len = rate * seconds;
+  const buf = c.createBuffer(2, len, rate);
+  for (let chn = 0; chn < 2; chn++) {
+    const d = buf.getChannelData(chn);
+    for (let i = 0; i < len; i++)
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
+function initAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.knee.value = 24; comp.ratio.value = 4;
+  master = ctx.createGain(); master.gain.value = 0.85;
+  master.connect(comp); comp.connect(ctx.destination);
+
+  reverb = ctx.createConvolver();
+  reverb.buffer = makeImpulse(ctx, 3.2, 3.5);
+  reverbGain = ctx.createGain(); reverbGain.gain.value = 0.4;
+  reverb.connect(reverbGain); reverbGain.connect(master);
+
+  // gentle air / vinyl warmth
+  const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * 0.5;
+  const noise = ctx.createBufferSource(); noise.buffer = noiseBuf; noise.loop = true;
+  const nFilt = ctx.createBiquadFilter(); nFilt.type = 'lowpass'; nFilt.frequency.value = 900;
+  const nGain = ctx.createGain(); nGain.gain.value = 0.006;
+  noise.connect(nFilt); nFilt.connect(nGain); nGain.connect(master); noise.start();
+}
+
+function send(node, dry, wet) {
+  const g1 = ctx.createGain(); g1.gain.value = dry; node.connect(g1); g1.connect(master);
+  const g2 = ctx.createGain(); g2.gain.value = wet; node.connect(g2); g2.connect(reverb);
+}
+
+/* felt-piano voice: layered detuned partials, pitch-scaled decay */
+function piano(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const decay = Math.max(0.9, 5.2 - midi * 0.035) * (0.7 + dur * 0.25);
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0, when);
+  out.gain.linearRampToValueAtTime(vel, when + 0.008);
+  out.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(Math.min(9000, f * 7), when);
+  lp.frequency.exponentialRampToValueAtTime(Math.max(500, f * 1.6), when + decay * 0.8);
+  out.connect(lp); send(lp, 0.62, 0.5);
+
+  const partials = [
+    { type: 'triangle', mult: 1, det: 0,  g: 1.0 },
+    { type: 'sine',     mult: 1, det: 3,  g: 0.55 },
+    { type: 'sine',     mult: 2, det: -2, g: 0.28 },
+    { type: 'sine',     mult: 3, det: 0,  g: 0.08 },
+  ];
+  for (const p of partials) {
+    const o = ctx.createOscillator();
+    o.type = p.type; o.frequency.value = f * p.mult; o.detune.value = p.det;
+    const g = ctx.createGain(); g.gain.value = p.g;
+    o.connect(g); g.connect(out);
+    o.start(when); o.stop(when + decay + 0.1);
+  }
+  // soft hammer thump
+  const th = ctx.createOscillator(); th.type = 'sine'; th.frequency.value = f * 0.5;
+  const tg = ctx.createGain();
+  tg.gain.setValueAtTime(vel * 0.25, when);
+  tg.gain.exponentialRampToValueAtTime(0.0001, when + 0.09);
+  th.connect(tg); tg.connect(out); th.start(when); th.stop(when + 0.12);
+}
+
+function pad(when, midis, dur, vel) {
+  for (const m of midis) {
+    const f = mtof(m);
+    for (const det of [-6, 6]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100; lp.Q.value = 0.4;
+      const g = ctx.createGain();
+      const a = dur * SPB * 0.45;
+      g.gain.setValueAtTime(0, when);
+      g.gain.linearRampToValueAtTime(vel / midis.length, when + a);
+      g.gain.setValueAtTime(vel / midis.length, when + dur * SPB * 0.7);
+      g.gain.linearRampToValueAtTime(0, when + dur * SPB * 1.05);
+      o.connect(lp); lp.connect(g); send(g, 0.5, 0.6);
+      o.start(when); o.stop(when + dur * SPB * 1.1 + 0.1);
+    }
+  }
+}
+
+function bass(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel, when + 0.04);
+  g.gain.setValueAtTime(vel * 0.8, when + dur * SPB * 0.6);
+  g.gain.linearRampToValueAtTime(0, when + dur * SPB);
+  const g2 = ctx.createGain(); g2.gain.value = 0.3;
+  o.connect(g); o2.connect(g2); g2.connect(g); send(g, 0.9, 0.08);
+  o.start(when); o.stop(when + dur * SPB + 0.1);
+  o2.start(when); o2.stop(when + dur * SPB + 0.1);
+}
+
+function kick(when, vel) {
+  const o = ctx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(120, when);
+  o.frequency.exponentialRampToValueAtTime(40, when + 0.12);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vel, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.3);
+  o.connect(g); send(g, 1.0, 0.05);
+  o.start(when); o.stop(when + 0.35);
+}
+
+function snap(when, vel) {
+  const len = ctx.sampleRate * 0.12;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 4);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2200; bp.Q.value = 1.2;
+  const g = ctx.createGain(); g.gain.value = vel;
+  s.connect(bp); bp.connect(g); send(g, 0.5, 0.6);
+  s.start(when);
+}
+
+function hat(when, vel) {
+  const len = ctx.sampleRate * 0.05;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 6);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7500;
+  const g = ctx.createGain(); g.gain.value = vel;
+  s.connect(hp); hp.connect(g); send(g, 0.7, 0.2);
+  s.start(when);
+}
+
+/* lookahead scheduler — wraps around the loop forever */
+function scheduler() {
+  const horizon = ctx.currentTime + 0.18;
+  while (true) {
+    const evt = SCORE[nextIdx];
+    const when = startTime + loopOffset + evt.t * SPB;
+    if (when > horizon) break;
+    fire(evt, when);
+    nextIdx++;
+    if (nextIdx >= SCORE.length) { nextIdx = 0; loopOffset += LOOP_SECONDS; loopsDone++; }
+  }
+}
+
+function fire(e, when) {
+  switch (e.type) {
+    case 'mel':
+      piano(when, e.n, e.d * SPB, e.v * 0.5);
+      visualQueue.push({ when, kind: 'note', n: e.n });
+      break;
+    case 'piano': piano(when, e.n, e.d * SPB, e.v * 0.42); break;
+    case 'pad':   pad(when, e.ns, e.d, e.v); break;
+    case 'bass':  bass(when, e.n, e.d, e.v); break;
+    case 'kick':  kick(when, e.v); visualQueue.push({ when, kind: 'kick' }); break;
+    case 'snap':  snap(when, e.v); break;
+    case 'hat':   hat(when, e.v); break;
+  }
+}
+
+function play() {
+  if (!ctx) initAudio();
+  ctx.resume();
+  playing = true;
+  startTime = ctx.currentTime + 0.1;
+  nextIdx = 0; loopOffset = 0; loopsDone = 0;
+  schedTimer = setInterval(scheduler, 30);
+  document.body.classList.add('playing');
+}
+
+function stop() {
+  playing = false;
+  clearInterval(schedTimer);
+  if (ctx) ctx.suspend();
+  document.body.classList.remove('playing');
+}
+
+document.getElementById('playBtn').addEventListener('click', e => { e.stopPropagation(); play(); });
+document.getElementById('pauseHit').addEventListener('click', () => stop());
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play(); }
+});
+
+/* ------------------------- VISUALS -------------------------------- */
+const cv = document.getElementById('scene');
+const cx = cv.getContext('2d');
+let W, H;
+function resize() { W = cv.width = innerWidth * devicePixelRatio; H = cv.height = innerHeight * devicePixelRatio; }
+addEventListener('resize', resize); resize();
+
+const stars = Array.from({ length: 160 }, () => ({
+  x: Math.random(), y: Math.random() * 0.85,
+  r: Math.random() * 1.4 + 0.3, tw: Math.random() * Math.PI * 2, sp: 0.3 + Math.random() * 1.2,
+}));
+const drift = Array.from({ length: 60 }, () => ({
+  x: Math.random(), y: Math.random(),
+  r: Math.random() * 2.2 + 0.6, vy: 0.008 + Math.random() * 0.02, vx: (Math.random() - 0.5) * 0.006,
+  a: 0.1 + Math.random() * 0.35, ph: Math.random() * Math.PI * 2,
+}));
+const ripples = [];   // { born, x, y, hue }
+let kickPulse = 0;
+
+function noteToXY(n) {
+  // melody range ~B4(71)..E6(88) → spread across the sky
+  const t = (n - 71) / 17;
+  return { x: 0.18 + t * 0.64, y: 0.52 - t * 0.3 };
+}
+
+function drainVisuals(now) {
+  for (let i = visualQueue.length - 1; i >= 0; i--) {
+    const v = visualQueue[i];
+    if (v.when <= now) {
+      if (v.kind === 'note') {
+        const p = noteToXY(v.n);
+        ripples.push({ born: now, x: p.x + (Math.random() - 0.5) * 0.04, y: p.y + (Math.random() - 0.5) * 0.04, hue: 225 + (v.n - 71) * 4 });
+      } else if (v.kind === 'kick') kickPulse = 1;
+      visualQueue.splice(i, 1);
+    }
+  }
+}
+
+const secEl = document.getElementById('section');
+const fillEl = document.getElementById('barFill');
+const loopEl = document.getElementById('loopCount');
+
+function draw() {
+  requestAnimationFrame(draw);
+  const now = ctx ? ctx.currentTime : performance.now() / 1000;
+  const t = performance.now() / 1000;
+  if (playing) drainVisuals(now);
+  kickPulse *= 0.94;
+
+  // position in loop
+  let pos = 0;
+  if (playing && ctx) {
+    pos = ((now - startTime) % LOOP_SECONDS + LOOP_SECONDS) % LOOP_SECONDS;
+    const frac = Math.max(0, pos / LOOP_SECONDS);
+    fillEl.style.width = (frac * 100).toFixed(2) + '%';
+    const sec = Math.min(3, Math.floor(frac * 4));
+    secEl.textContent = SECTION_NAMES[sec];
+    loopEl.textContent = loopsDone > 0 ? 'loop ' + (loopsDone + 1) : '';
+  }
+
+  // sky
+  const g = cx.createLinearGradient(0, 0, 0, H);
+  const breathe = Math.sin(t * 0.15) * 0.5 + 0.5;
+  g.addColorStop(0, `rgb(${8 + breathe * 4}, ${9 + breathe * 5}, ${26 + breathe * 10})`);
+  g.addColorStop(0.55, '#0c0e22');
+  g.addColorStop(1, '#151031');
+  cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+
+  // aurora ribbons
+  cx.save(); cx.globalCompositeOperation = 'lighter';
+  for (let band = 0; band < 3; band++) {
+    cx.beginPath();
+    const baseY = H * (0.3 + band * 0.13);
+    for (let x = 0; x <= W; x += W / 60) {
+      const y = baseY + Math.sin(x / W * 4 + t * (0.25 + band * 0.1) + band * 2) * H * 0.05
+                      + Math.sin(x / W * 9 - t * 0.18) * H * 0.02;
+      x === 0 ? cx.moveTo(x, y) : cx.lineTo(x, y);
+    }
+    cx.strokeStyle = `hsla(${245 + band * 25 + Math.sin(t * 0.1) * 12}, 70%, 62%, ${0.05 + band * 0.012})`;
+    cx.lineWidth = H * 0.07; cx.lineCap = 'round'; cx.stroke();
+  }
+  cx.restore();
+
+  // stars
+  cx.save();
+  for (const s of stars) {
+    const a = 0.25 + 0.6 * Math.abs(Math.sin(s.tw + t * s.sp));
+    cx.globalAlpha = a;
+    cx.fillStyle = '#cdd6ff';
+    cx.beginPath(); cx.arc(s.x * W, s.y * H, s.r * devicePixelRatio, 0, 7); cx.fill();
+  }
+  cx.restore();
+
+  // the moon-orb — pulses with the heartbeat
+  const mx = W * 0.5, my = H * 0.42;
+  const baseR = Math.min(W, H) * 0.085;
+  const r = baseR * (1 + kickPulse * 0.1 + Math.sin(t * 0.6) * 0.015);
+  const halo = cx.createRadialGradient(mx, my, r * 0.2, mx, my, r * 5);
+  halo.addColorStop(0, `rgba(170,185,255,${0.32 + kickPulse * 0.25})`);
+  halo.addColorStop(0.4, 'rgba(140,150,255,0.10)');
+  halo.addColorStop(1, 'rgba(120,130,255,0)');
+  cx.fillStyle = halo;
+  cx.fillRect(mx - r * 5, my - r * 5, r * 10, r * 10);
+  const orb = cx.createRadialGradient(mx - r * 0.3, my - r * 0.35, r * 0.1, mx, my, r);
+  orb.addColorStop(0, '#f4f6ff');
+  orb.addColorStop(0.7, '#c9d2ff');
+  orb.addColorStop(1, '#9aa6e8');
+  cx.fillStyle = orb;
+  cx.beginPath(); cx.arc(mx, my, r, 0, 7); cx.fill();
+
+  // rising dust
+  cx.save(); cx.globalCompositeOperation = 'lighter';
+  for (const p of drift) {
+    p.y -= p.vy / 60; p.x += p.vx / 60 + Math.sin(t + p.ph) * 0.00015;
+    if (p.y < -0.02) { p.y = 1.02; p.x = Math.random(); }
+    cx.globalAlpha = p.a * (0.5 + 0.5 * Math.sin(t * 1.3 + p.ph));
+    cx.fillStyle = '#aab8ff';
+    cx.beginPath(); cx.arc(p.x * W, p.y * H, p.r * devicePixelRatio, 0, 7); cx.fill();
+  }
+  cx.restore();
+
+  // note ripples
+  cx.save(); cx.globalCompositeOperation = 'lighter';
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const rp = ripples[i];
+    const age = now - rp.born;
+    if (age > 2.4) { ripples.splice(i, 1); continue; }
+    const k = age / 2.4;
+    const rad = (0.012 + k * 0.10) * Math.min(W, H);
+    const alpha = (1 - k) * 0.5;
+    cx.strokeStyle = `hsla(${rp.hue}, 85%, 75%, ${alpha})`;
+    cx.lineWidth = (2.2 - k * 1.8) * devicePixelRatio;
+    cx.beginPath(); cx.arc(rp.x * W, rp.y * H, rad, 0, 7); cx.stroke();
+    // bright core at birth
+    if (k < 0.3) {
+      cx.fillStyle = `hsla(${rp.hue}, 90%, 85%, ${(0.3 - k) * 2})`;
+      cx.beginPath(); cx.arc(rp.x * W, rp.y * H, 3 * devicePixelRatio, 0, 7); cx.fill();
+    }
+  }
+  cx.restore();
+}
+draw();
+</script>
+</body>
+</html>

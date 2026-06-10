@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skyways '55 — world routes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #04182e; overflow: hidden;
+    font-family: 'Courier New', ui-monospace, monospace; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+  #crt { position: fixed; inset: 0; pointer-events: none; z-index: 3;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.13) 0px, rgba(0,0,0,0.13) 1px, transparent 2px, transparent 4px);
+  }
+  .panel {
+    background: linear-gradient(180deg, #1e4f9e, #123567);
+    border: 3px solid #e8ecf8; border-radius: 4px;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.25);
+    color: #fff; padding: 7px 13px; font-weight: bold;
+    text-shadow: 1px 1px 0 #0a1f44; letter-spacing: 0.08em; font-size: 13px;
+  }
+  #ui {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; z-index: 4;
+    transition: opacity .9s ease;
+  }
+  #titlePanel { text-align: center; padding: 22px 40px; }
+  #titlePanel h1 { font-size: clamp(26px, 5vw, 44px); letter-spacing: 0.14em; color: #ffe27a;
+    text-shadow: 2px 2px 0 #7a3b00, 4px 4px 0 rgba(0,0,0,0.4); }
+  #titlePanel p { margin-top: 10px; font-size: 12px; letter-spacing: 0.22em; color: #cfe0ff; text-transform: uppercase; }
+  #playBtn { cursor: pointer; margin-top: 4px; font-size: 15px; letter-spacing: 0.2em;
+    padding: 12px 34px; text-transform: uppercase; }
+  #playBtn:hover { filter: brightness(1.25); }
+  #hint { font-size: 11px; color: #9db8e8; letter-spacing: 0.18em; text-transform: uppercase;
+    text-shadow: 1px 1px 0 #051226; opacity: 0.8; }
+  #hud { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; z-index: 2; }
+  #coPanel   { position: absolute; top: 14px; left: 14px; }
+  #datePanel { position: absolute; top: 14px; right: 14px; text-align: right; }
+  #cash { color: #8aff9e; }
+  #ticker { position: absolute; bottom: 14px; left: 14px; max-width: 64vw; font-size: 12px; }
+  #ticker .new { color: #ffe27a; }
+  #status { position: absolute; bottom: 14px; right: 14px; text-align: right; font-size: 12px; }
+  #pbar { width: 150px; height: 8px; border: 2px solid #e8ecf8; background: #0a224a; margin-top: 6px; margin-left: auto; }
+  #pfill { height: 100%; width: 0%; background: #ffe27a; }
+  body.playing #ui { opacity: 0; pointer-events: none; }
+  body.playing #hud { opacity: 1; }
+  #pauseHit { position: fixed; inset: 0; display: none; z-index: 1; }
+  body.playing #pauseHit { display: block; }
+  #nav { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 5; }
+  #nav a { color: #cfe0ff; text-decoration: none; font-size: 11px; padding: 5px 12px; }
+  #nav a:hover { color: #ffe27a; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="crt"></div>
+<div id="pauseHit"></div>
+<div id="nav" class="panel"><a href="afterglow.html">&#9666; AFTERGLOW</a> &nbsp;|&nbsp; <a href="neon-horizon.html">NEON HORIZON &#9656;</a></div>
+
+<div id="ui">
+  <div id="titlePanel" class="panel">
+    <h1>SKYWAYS '55</h1>
+    <p>a world-routes groove &middot; 16-bit jazz</p>
+  </div>
+  <div id="playBtn" class="panel">&#9658; START GAME</div>
+  <div id="hint">tap anywhere to pause &middot; space toggles</div>
+</div>
+
+<div id="hud">
+  <div id="coPanel" class="panel">AFTERGLOW AIRWAYS<br><span id="cash">$8,000,000</span></div>
+  <div id="datePanel" class="panel"><span id="qdate">Q1 1955</span></div>
+  <div id="ticker" class="panel">Welcome aboard, President.</div>
+  <div id="status" class="panel"><span id="section">boarding</span><div id="pbar"><div id="pfill"></div></div></div>
+</div>
+
+<script>
+/* =====================================================================
+   SKYWAYS '55 — Koei-flavored 16-bit jazz-funk world-map loop.
+   112 BPM · Cmaj7 Am7 Dm7 G7 / Fmaj7 Em7 Dm7 G7 · 32 bars (~69 s)
+   ===================================================================== */
+
+const BPM = 112, SPB = 60 / BPM, LOOP_BARS = 32, LOOP_BEATS = LOOP_BARS * 4;
+const LOOP_SECONDS = LOOP_BEATS * SPB;
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+/* ------------------------- THE SCORE ------------------------------ */
+// 8-bar chord cycle, repeated 4x with different arrangement sections
+const BARS = [
+  { root: 36, qual: 'maj', comp: [64, 67, 71] },  // Cmaj7
+  { root: 33, qual: 'min', comp: [64, 67, 72] },  // Am7
+  { root: 38, qual: 'min', comp: [65, 69, 72] },  // Dm7
+  { root: 31, qual: 'dom', comp: [65, 71, 74] },  // G7
+  { root: 41, qual: 'maj', comp: [64, 69, 72] },  // Fmaj7
+  { root: 40, qual: 'min', comp: [67, 71, 74] },  // Em7
+  { root: 38, qual: 'min', comp: [65, 69, 72] },  // Dm7
+  { root: 31, qual: 'dom', comp: [65, 71, 74] },  // G7
+];
+
+// the lead hook — one 8-bar (32-beat) phrase
+const LEAD = [
+  { t: 0, n: 67, d: .5 }, { t: .5, n: 72, d: .5 }, { t: 1, n: 76, d: 1.25 },
+  { t: 2.5, n: 74, d: .5 }, { t: 3, n: 76, d: .5 }, { t: 3.5, n: 79, d: 1.5 },
+  { t: 5, n: 81, d: 1 }, { t: 6.5, n: 76, d: .5 }, { t: 7, n: 72, d: .5 }, { t: 7.5, n: 74, d: .5 },
+  { t: 8, n: 77, d: 1.5 }, { t: 9.5, n: 76, d: .5 }, { t: 10, n: 74, d: .5 }, { t: 10.5, n: 72, d: .5 }, { t: 11, n: 74, d: 1.5 },
+  { t: 14, n: 74, d: .5 }, { t: 14.5, n: 76, d: .5 }, { t: 15, n: 77, d: .5 }, { t: 15.5, n: 79, d: .5 },
+  { t: 16, n: 81, d: 1.5 }, { t: 17.5, n: 79, d: .5 }, { t: 18, n: 77, d: .5 }, { t: 18.5, n: 76, d: .5 }, { t: 19, n: 77, d: 1 },
+  { t: 20, n: 79, d: .75 }, { t: 20.75, n: 83, d: 1.25 }, { t: 22.5, n: 81, d: .5 }, { t: 23, n: 79, d: .5 }, { t: 23.5, n: 76, d: .5 },
+  { t: 24, n: 74, d: .75 }, { t: 24.75, n: 77, d: .75 }, { t: 25.5, n: 81, d: 1 },
+  { t: 26.5, n: 79, d: .5 }, { t: 27, n: 77, d: .5 }, { t: 27.5, n: 76, d: .5 },
+  { t: 28, n: 74, d: 1 }, { t: 29, n: 71, d: .5 }, { t: 29.5, n: 67, d: 1 }, { t: 31, n: 71, d: .5 }, { t: 31.5, n: 74, d: .5 },
+];
+
+function buildScore() {
+  const ev = [];
+  const push = (t, type, o) => ev.push(Object.assign({ t, type }, o));
+
+  for (let bar = 0; bar < LOOP_BARS; bar++) {
+    const t0 = bar * 4;
+    const b = BARS[bar % 8];
+    const next = BARS[(bar + 1) % 8];
+    const section = Math.floor(bar / 8);   // 0 boarding 1 takeoff 2 cruising 3 descent
+
+    /* funky bass riff */
+    let nr = next.root;
+    while (nr < b.root - 6) nr += 12;
+    while (nr > b.root + 6) nr -= 12;
+    const sev = b.qual === 'maj' ? b.root + 9 : b.root + 10;
+    const bvel = section === 3 ? 0.8 : 1;
+    push(t0 + 0,    'bass', { n: b.root,      d: .55, v: .6 * bvel });
+    push(t0 + 0.75, 'bass', { n: b.root,      d: .22, v: .38 * bvel });
+    push(t0 + 1.5,  'bass', { n: b.root + 12, d: .35, v: .48 * bvel });
+    push(t0 + 2.25, 'bass', { n: b.root + 7,  d: .35, v: .42 * bvel });
+    push(t0 + 3.0,  'bass', { n: sev,         d: .3,  v: .4 * bvel });
+    push(t0 + 3.5,  'bass', { n: nr - 1,      d: .4,  v: .44 * bvel });
+
+    /* e-piano comping: syncopated stabs */
+    if (bar % 4 === 0) push(t0, 'ep', { ns: b.comp, d: 1.3, v: .3 });
+    push(t0 + 1.5, 'ep', { ns: b.comp, d: .45, v: .42 });
+    push(t0 + 3.5, 'ep', { ns: b.comp, d: .45, v: .38 });
+
+    /* drums */
+    if (section <= 2) {
+      push(t0 + 0,   'kick', { v: .9 });
+      push(t0 + 2.5, 'kick', { v: .7 });
+      if (bar % 2 === 1) push(t0 + 1.75, 'kick', { v: .45 });
+      push(t0 + 1, 'snare', { v: .7 });
+      push(t0 + 3, 'snare', { v: .7 });
+      const step = section === 2 ? 0.25 : 0.5;
+      for (let h = 0; h < 4 / step; h++) {
+        const tt = h * step;
+        push(t0 + tt, 'hat', { v: tt % 1 === 0.5 ? .3 : tt % 1 === 0 ? .18 : .1 });
+      }
+    } else {
+      push(t0, 'kick', { v: .6 });
+      push(t0 + 2, 'snare', { v: .45 });
+      for (let h = 0; h < 4; h++) push(t0 + h, 'hat', { v: .14 });
+      if (bar === 31) {  // fill back into the groove
+        [2, 2.5, 3, 3.25, 3.5, 3.75].forEach((tt, i) =>
+          push(t0 + tt, 'snare', { v: .25 + i * 0.09 }));
+      }
+    }
+
+    /* lead hook: pulse-wave in takeoff+cruising, flute in descent */
+    if (bar % 8 === 0 && section >= 1) {
+      const inst = section === 3 ? 'flute' : 'lead';
+      for (const e of LEAD) {
+        push(t0 + e.t, inst, { n: e.n, d: e.d, v: section === 3 ? .5 : section === 2 ? .8 : .72 });
+      }
+    }
+
+    /* brass stabs: intro fill + accents on the G7 bars while cruising */
+    const G7 = [65, 71, 74, 79];
+    if (bar === 7) [2.5, 3, 3.5].forEach((tt, i) => push(t0 + tt, 'brass', { ns: G7, d: .25, v: .26 + i * .1 }));
+    if (section === 2 && bar % 8 === 3) { push(t0, 'brass', { ns: G7, d: .3, v: .4 }); push(t0 + 1.75, 'brass', { ns: G7, d: .2, v: .32 }); }
+    if (section === 2 && bar % 8 === 7) [0, 1.75, 3, 3.5].forEach(tt => push(t0 + tt, 'brass', { ns: G7, d: .22, v: .36 }));
+
+    /* visual cue: open a new air route every 2 bars */
+    if (bar % 2 === 0) push(t0, 'route', {});
+  }
+
+  ev.sort((a, b2) => a.t - b2.t);
+  return ev;
+}
+
+const SCORE = buildScore();
+const SECTION_NAMES = ['boarding', 'takeoff', 'cruising', 'descent'];
+
+/* ----------------------- AUDIO ENGINE ----------------------------- */
+let ctx = null, master, comp, reverb, reverbGain, leadDelay, pulseWave;
+let playing = false, startTime = 0, nextIdx = 0, loopOffset = 0, loopsDone = 0;
+let schedTimer = null;
+const visualQueue = [];
+
+function makeImpulse(c, seconds, decay) {
+  const rate = c.sampleRate, len = rate * seconds;
+  const buf = c.createBuffer(2, len, rate);
+  for (let chn = 0; chn < 2; chn++) {
+    const d = buf.getChannelData(chn);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
+function initAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.knee.value = 20; comp.ratio.value = 5;
+  master = ctx.createGain(); master.gain.value = 0.8;
+  master.connect(comp); comp.connect(ctx.destination);
+
+  reverb = ctx.createConvolver(); reverb.buffer = makeImpulse(ctx, 1.3, 3);
+  reverbGain = ctx.createGain(); reverbGain.gain.value = 0.22;
+  reverb.connect(reverbGain); reverbGain.connect(master);
+
+  // dotted-8th echo for the lead — very SNES
+  leadDelay = ctx.createDelay(1);
+  leadDelay.delayTime.value = SPB * 0.75;
+  const fb = ctx.createGain(); fb.gain.value = 0.32;
+  const wet = ctx.createGain(); wet.gain.value = 0.2;
+  leadDelay.connect(fb); fb.connect(leadDelay);
+  leadDelay.connect(wet); wet.connect(master);
+
+  // 25%-duty pulse wave for that chip-lead tone
+  const H = 24, real = new Float32Array(H + 1), imag = new Float32Array(H + 1);
+  for (let n = 1; n <= H; n++) imag[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * 0.25);
+  pulseWave = ctx.createPeriodicWave(real, imag);
+}
+
+function send(node, dry, wet) {
+  const g1 = ctx.createGain(); g1.gain.value = dry; node.connect(g1); g1.connect(master);
+  const g2 = ctx.createGain(); g2.gain.value = wet; node.connect(g2); g2.connect(reverb);
+}
+
+/* DX-style FM electric piano */
+function epNote(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const car = ctx.createOscillator(); car.type = 'sine'; car.frequency.value = f;
+  const mod = ctx.createOscillator(); mod.type = 'sine'; mod.frequency.value = f * 14;
+  const mg = ctx.createGain();
+  mg.gain.setValueAtTime(f * 2.2, when);
+  mg.gain.exponentialRampToValueAtTime(f * 0.05, when + 0.5);
+  mod.connect(mg); mg.connect(car.frequency);
+  const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2;
+  const g2 = ctx.createGain(); g2.gain.value = 0.18; o2.connect(g2);
+  const g = ctx.createGain();
+  const rel = Math.max(dur, 0.35) + 0.35;
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel, when + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + rel);
+  car.connect(g); g2.connect(g); send(g, 0.6, 0.35);
+  car.start(when); car.stop(when + rel + .1);
+  mod.start(when); mod.stop(when + rel + .1);
+  o2.start(when); o2.stop(when + rel + .1);
+}
+function ep(when, midis, dur, vel) { for (const m of midis) epNote(when, m, dur * SPB, vel / Math.sqrt(midis.length)); }
+
+function bass(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 2;
+  lp.frequency.setValueAtTime(1100, when);
+  lp.frequency.exponentialRampToValueAtTime(300, when + 0.18);
+  const g = ctx.createGain();
+  const len = dur * SPB;
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel, when + 0.008);
+  g.gain.setValueAtTime(vel * 0.7, when + len * 0.6);
+  g.gain.linearRampToValueAtTime(0, when + len);
+  const gm = ctx.createGain(); gm.gain.value = 0.35;
+  o.connect(gm); gm.connect(lp); o2.connect(lp); lp.connect(g); send(g, 1, 0.04);
+  o.start(when); o.stop(when + len + .05);
+  o2.start(when); o2.stop(when + len + .05);
+}
+
+function lead(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const o = ctx.createOscillator(); o.setPeriodicWave(pulseWave); o.frequency.value = f;
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 5.6;
+  const lg = ctx.createGain(); lg.gain.setValueAtTime(0, when);
+  lg.gain.setValueAtTime(0, when + 0.12);
+  lg.gain.linearRampToValueAtTime(9, when + 0.3);
+  lfo.connect(lg); lg.connect(o.detune);
+  const len = dur * SPB;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel * 0.32, when + 0.015);
+  g.gain.setValueAtTime(vel * 0.3, when + Math.max(0.05, len - 0.06));
+  g.gain.linearRampToValueAtTime(0, when + len + 0.03);
+  o.connect(g); send(g, 0.62, 0.18); g.connect(leadDelay);
+  o.start(when); o.stop(when + len + 0.1);
+  lfo.start(when); lfo.stop(when + len + 0.1);
+}
+
+function flute(when, midi, dur, vel) {
+  const f = mtof(midi);
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f;
+  const g2 = ctx.createGain(); g2.gain.value = 0.25; o2.connect(g2);
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 5;
+  const lg = ctx.createGain(); lg.gain.value = 7; lfo.connect(lg); lg.connect(o.detune);
+  const len = dur * SPB;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel * 0.3, when + 0.06);
+  g.gain.setValueAtTime(vel * 0.26, when + Math.max(0.08, len - 0.08));
+  g.gain.linearRampToValueAtTime(0, when + len + 0.05);
+  o.connect(g); g2.connect(g); send(g, 0.5, 0.4); g.connect(leadDelay);
+  o.start(when); o.stop(when + len + 0.1);
+  o2.start(when); o2.stop(when + len + 0.1);
+  lfo.start(when); lfo.stop(when + len + 0.1);
+}
+
+function brass(when, midis, dur, vel) {
+  for (const m of midis) {
+    const f = mtof(m);
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 1.5;
+    lp.frequency.setValueAtTime(700, when);
+    lp.frequency.linearRampToValueAtTime(3200, when + 0.05);
+    lp.frequency.exponentialRampToValueAtTime(900, when + dur * SPB + 0.1);
+    const g = ctx.createGain();
+    const v = vel / midis.length;
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(v, when + 0.025);
+    g.gain.setValueAtTime(v * 0.8, when + dur * SPB);
+    g.gain.linearRampToValueAtTime(0, when + dur * SPB + 0.12);
+    o.connect(lp); lp.connect(g); send(g, 0.6, 0.3);
+    o.start(when); o.stop(when + dur * SPB + 0.2);
+  }
+}
+
+function kick(when, vel) {
+  const o = ctx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(150, when);
+  o.frequency.exponentialRampToValueAtTime(45, when + 0.09);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vel, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.22);
+  o.connect(g); send(g, 1, 0.03);
+  o.start(when); o.stop(when + 0.25);
+}
+
+function snare(when, vel) {
+  const len = ctx.sampleRate * 0.14;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+  const g = ctx.createGain(); g.gain.value = vel * 0.8;
+  s.connect(bp); bp.connect(g); send(g, 0.6, 0.35);
+  const t = ctx.createOscillator(); t.type = 'triangle'; t.frequency.value = 185;
+  const tg = ctx.createGain();
+  tg.gain.setValueAtTime(vel * 0.4, when);
+  tg.gain.exponentialRampToValueAtTime(0.0001, when + 0.08);
+  t.connect(tg); send(tg, 0.8, 0.1);
+  s.start(when); t.start(when); t.stop(when + 0.1);
+}
+
+function hat(when, vel) {
+  const len = ctx.sampleRate * 0.04;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 8000;
+  const g = ctx.createGain(); g.gain.value = vel;
+  s.connect(hp); hp.connect(g); send(g, 0.8, 0.1);
+  s.start(when);
+}
+
+function scheduler() {
+  const horizon = ctx.currentTime + 0.18;
+  while (true) {
+    const evt = SCORE[nextIdx];
+    const when = startTime + loopOffset + evt.t * SPB;
+    if (when > horizon) break;
+    fire(evt, when);
+    nextIdx++;
+    if (nextIdx >= SCORE.length) { nextIdx = 0; loopOffset += LOOP_SECONDS; loopsDone++; }
+  }
+}
+
+function fire(e, when) {
+  switch (e.type) {
+    case 'bass':  bass(when, e.n, e.d, e.v); break;
+    case 'ep':    ep(when, e.ns, e.d, e.v); break;
+    case 'lead':  lead(when, e.n, e.d, e.v); visualQueue.push({ when, kind: 'ping' }); break;
+    case 'flute': flute(when, e.n, e.d, e.v); visualQueue.push({ when, kind: 'ping' }); break;
+    case 'brass': brass(when, e.ns, e.d, e.v); break;
+    case 'kick':  kick(when, e.v); visualQueue.push({ when, kind: 'kick' }); break;
+    case 'snare': snare(when, e.v); break;
+    case 'hat':   hat(when, e.v); break;
+    case 'route': visualQueue.push({ when, kind: 'route' }); break;
+  }
+}
+
+function play() {
+  if (!ctx) initAudio();
+  ctx.resume();
+  playing = true;
+  startTime = ctx.currentTime + 0.1;
+  nextIdx = 0; loopOffset = 0; loopsDone = 0;
+  schedTimer = setInterval(scheduler, 30);
+  document.body.classList.add('playing');
+}
+function stop() {
+  playing = false;
+  clearInterval(schedTimer);
+  if (ctx) ctx.suspend();
+  document.body.classList.remove('playing');
+}
+document.getElementById('playBtn').addEventListener('click', e => { e.stopPropagation(); play(); });
+document.getElementById('pauseHit').addEventListener('click', () => stop());
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play(); }
+});
+
+/* ------------------------- VISUALS: THE WORLD MAP ------------------ */
+const MW = 384, MH = 192;                       // low-res map pixels (2 px / deg lon)
+const px = lon => (lon + 180) / 360 * MW;
+const py = lat => (90 - lat) / 180 * MH;
+
+const CONTINENTS = [
+  // North America
+  [[-168,66],[-158,71],[-140,70],[-125,72],[-110,73],[-95,72],[-85,70],[-80,73],[-72,68],[-70,62],[-55,52],[-60,46],[-70,44],[-75,38],[-76,34],[-81,30],[-80,25],[-83,28],[-90,29],[-94,28],[-97,25],[-97,20],[-91,17],[-87,14],[-83,9],[-79,8],[-85,11],[-95,15],[-105,19],[-110,22],[-114,29],[-120,33],[-124,39],[-125,47],[-130,53],[-136,57],[-148,60],[-158,57],[-165,62]],
+  // Greenland
+  [[-52,60],[-42,60],[-25,68],[-20,75],[-30,83],[-58,82],[-68,77],[-60,72],[-52,66]],
+  // South America
+  [[-79,8],[-72,12],[-62,10],[-52,4],[-44,-2],[-35,-7],[-38,-14],[-47,-24],[-53,-33],[-58,-38],[-64,-44],[-70,-52],[-67,-55],[-71,-51],[-73,-44],[-71,-33],[-70,-20],[-76,-12],[-81,-5],[-80,1]],
+  // Africa
+  [[-17,14],[-16,22],[-10,30],[-5,35],[3,37],[10,37],[20,32],[30,31],[34,27],[38,18],[44,11],[51,11],[46,4],[40,-4],[39,-12],[35,-20],[33,-27],[26,-34],[19,-35],[15,-28],[12,-18],[13,-10],[9,-1],[9,4],[-5,4],[-12,7]],
+  // Eurasia
+  [[-10,36],[-9,43],[-2,44],[0,46],[-5,48],[2,50],[8,54],[8,57],[5,58],[5,62],[12,66],[20,70],[28,71],[32,68],[40,67],[50,69],[60,70],[75,73],[90,76],[105,77],[120,73],[135,72],[150,70],[165,69],[177,64],[170,60],[162,58],[158,52],[150,59],[142,54],[140,48],[131,43],[127,40],[122,38],[121,30],[112,22],[109,13],[105,9],[104,2],[101,5],[99,9],[95,16],[91,22],[88,21],[85,19],[80,13],[77,8],[73,16],[68,23],[66,25],[61,25],[57,27],[56,24],[59,22],[57,17],[52,13],[44,12],[43,17],[39,21],[35,28],[36,33],[36,36],[30,36],[27,37],[23,36],[22,40],[19,40],[15,38],[12,44],[10,44],[3,41],[-2,37],[-6,36]],
+  // Australia
+  [[113,-22],[114,-26],[115,-34],[124,-33],[129,-32],[132,-32],[135,-35],[138,-35],[140,-38],[146,-39],[150,-37],[153,-30],[153,-25],[149,-20],[145,-15],[142,-11],[136,-12],[132,-11],[126,-14],[122,-17]],
+];
+const ISLANDS = [ // [lon, lat, radius-deg]
+  [-2,53,2.6],[-19,65,2],[131,33,1.6],[135,35,1.8],[140,38,2],[142,43,1.8],
+  [101,-1,2.4],[110,-7,1.8],[114,0,2.8],[121,-2,1.8],[138,-4,3.2],[122,13,1.8],
+  [47,-16,1.6],[46,-22,1.6],[81,7,1.2],[173,-41,1.6],[169,-45,1.5],[147,-42,1.4],[-78,22,1.6],
+];
+
+const CITIES = [
+  { name: 'TOKYO',        lon: 139.7, lat: 35.7 },
+  { name: 'HONG KONG',    lon: 114.2, lat: 22.3 },
+  { name: 'SINGAPORE',    lon: 103.8, lat: 1.4 },
+  { name: 'SYDNEY',       lon: 151.2, lat: -33.9 },
+  { name: 'DELHI',        lon: 77.2,  lat: 28.6 },
+  { name: 'DUBAI',        lon: 55.3,  lat: 25.3 },
+  { name: 'MOSCOW',       lon: 37.6,  lat: 55.8 },
+  { name: 'CAIRO',        lon: 31.2,  lat: 30.0 },
+  { name: 'LONDON',       lon: -0.1,  lat: 51.5 },
+  { name: 'PARIS',        lon: 2.3,   lat: 48.9 },
+  { name: 'LAGOS',        lon: 3.4,   lat: 6.5 },
+  { name: 'NEW YORK',     lon: -74.0, lat: 40.7 },
+  { name: 'LOS ANGELES',  lon: -118.2,lat: 34.1 },
+  { name: 'MEXICO CITY',  lon: -99.1, lat: 19.4 },
+  { name: 'RIO',          lon: -43.2, lat: -22.9 },
+  { name: 'BUENOS AIRES', lon: -58.4, lat: -34.6 },
+  { name: 'HONOLULU',     lon: -157.9,lat: 21.3 },
+  { name: 'JOHANNESBURG', lon: 28.0,  lat: -26.2 },
+];
+const ROUTE_POOL = [
+  [8,11],[0,12],[8,5],[5,2],[2,3],[0,1],[11,14],[14,15],[8,7],[7,17],
+  [4,5],[1,2],[12,16],[16,0],[9,7],[6,4],[13,12],[11,8],[3,2],[10,8],
+  [15,17],[0,16],[6,8],[4,1],[13,11],[5,7],[9,6],[12,13],[14,10],[1,0],
+];
+
+const cv = document.getElementById('scene');
+const g2d = cv.getContext('2d');
+g2d.imageSmoothingEnabled = false;
+let W, H;
+function resize() { W = cv.width = innerWidth; H = cv.height = innerHeight; g2d.imageSmoothingEnabled = false; }
+addEventListener('resize', resize); resize();
+
+/* static map layer, drawn once */
+const mapCv = document.createElement('canvas'); mapCv.width = MW; mapCv.height = MH;
+const mg = mapCv.getContext('2d');
+(function paintMap() {
+  mg.fillStyle = '#0d3a6e'; mg.fillRect(0, 0, MW, MH);          // ocean
+  mg.strokeStyle = 'rgba(120,170,230,0.14)'; mg.lineWidth = 1;   // graticule
+  for (let lon = -150; lon <= 150; lon += 30) { mg.beginPath(); mg.moveTo(px(lon), 0); mg.lineTo(px(lon), MH); mg.stroke(); }
+  for (let lat = -60; lat <= 60; lat += 30) { mg.beginPath(); mg.moveTo(0, py(lat)); mg.lineTo(MW, py(lat)); mg.stroke(); }
+  mg.fillStyle = '#2f9352'; mg.strokeStyle = '#1b5c33'; mg.lineWidth = 1.5;
+  for (const poly of CONTINENTS) {
+    mg.beginPath();
+    poly.forEach(([lon, lat], i) => i === 0 ? mg.moveTo(px(lon), py(lat)) : mg.lineTo(px(lon), py(lat)));
+    mg.closePath(); mg.fill(); mg.stroke();
+  }
+  for (const [lon, lat, r] of ISLANDS) {
+    mg.beginPath(); mg.arc(px(lon), py(lat), r * MW / 360 * 2, 0, 7); mg.fill(); mg.stroke();
+  }
+  // 16-bit dither texture on land
+  const img = mg.getImageData(0, 0, MW, MH), d = img.data;
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const i = (y * MW + x) * 4;
+    if (d[i + 1] > 100 && d[i] < 90 && (x + y) % 2 === 0) { d[i] -= 14; d[i + 1] -= 18; d[i + 2] -= 8; }
+  }
+  mg.putImageData(img, 0, 0);
+})();
+
+/* dynamic layer (routes, planes, cities) also at low-res */
+const dynCv = document.createElement('canvas'); dynCv.width = MW; dynCv.height = MH;
+const dg = dynCv.getContext('2d');
+
+const routes = [];     // { a, b, cx, cy, born, plane: t, dir }
+const pings = [];      // { x, y, born }
+let routeCounter = 0, pingCounter = 0, kickPulse = 0, routesOpened = 0;
+const tickerEl = document.getElementById('ticker');
+
+function routePoints(a, b) {
+  let ax = px(a.lon), bx = px(b.lon);
+  if (Math.abs(bx - ax) > MW / 2) { if (bx > ax) bx -= MW; else bx += MW; }   // date-line wrap
+  const ay = py(a.lat), by = py(b.lat);
+  const mx = (ax + bx) / 2, my = (ay + by) / 2;
+  const dist = Math.hypot(bx - ax, by - ay);
+  return { ax, ay, bx, by, cx: mx, cy: my - dist * 0.25 };   // arc lifted poleward
+}
+
+function openRoute(now) {
+  const [ia, ib] = ROUTE_POOL[routeCounter % ROUTE_POOL.length];
+  routeCounter++;
+  const a = CITIES[ia], b = CITIES[ib];
+  if (routes.some(r => r.ia === ia && r.ib === ib)) return;
+  const pts = routePoints(a, b);
+  routes.push(Object.assign({ ia, ib, born: now, plane: 0, dir: 1,
+    speed: 30 / Math.max(40, Math.hypot(pts.bx - pts.ax, pts.by - pts.ay)) }, pts));
+  if (routes.length > 11) routes.shift();
+  routesOpened++;
+  tickerEl.innerHTML = '<span class="new">NEW ROUTE:</span> ' + a.name + ' &#8644; ' + b.name;
+}
+
+function qbez(r, t) {
+  const u = 1 - t;
+  return { x: u * u * r.ax + 2 * u * t * r.cx + t * t * r.bx,
+           y: u * u * r.ay + 2 * u * t * r.cy + t * t * r.by };
+}
+
+function drainVisuals(now) {
+  for (let i = visualQueue.length - 1; i >= 0; i--) {
+    const v = visualQueue[i];
+    if (v.when <= now) {
+      if (v.kind === 'route') openRoute(now);
+      else if (v.kind === 'kick') kickPulse = 1;
+      else if (v.kind === 'ping') {
+        const r = routes.length ? routes[pingCounter % routes.length] : null;
+        pingCounter++;
+        const c = r ? CITIES[pingCounter % 2 ? r.ia : r.ib] : CITIES[pingCounter % CITIES.length];
+        pings.push({ x: px(c.lon), y: py(c.lat), born: now });
+      }
+      visualQueue.splice(i, 1);
+    }
+  }
+}
+
+const secEl = document.getElementById('section');
+const fillEl = document.getElementById('pfill');
+const qEl = document.getElementById('qdate');
+const cashEl = document.getElementById('cash');
+
+let lastT = performance.now() / 1000;
+function draw() {
+  requestAnimationFrame(draw);
+  const now = ctx ? ctx.currentTime : 0;
+  const t = performance.now() / 1000;
+  const dt = Math.min(0.1, t - lastT); lastT = t;
+  if (playing) drainVisuals(now);
+  kickPulse *= 0.9;
+
+  let frac = 0;
+  if (playing && ctx) {
+    const pos = ((now - startTime) % LOOP_SECONDS + LOOP_SECONDS) % LOOP_SECONDS;
+    frac = Math.max(0, pos / LOOP_SECONDS);
+    fillEl.style.width = (frac * 100).toFixed(1) + '%';
+    secEl.textContent = SECTION_NAMES[Math.min(3, Math.floor(frac * 4))];
+    qEl.textContent = 'Q' + (Math.min(3, Math.floor(frac * 4)) + 1) + ' ' + (1955 + loopsDone);
+    const cash = 8000000 + Math.floor((now - startTime) * 9750) + routesOpened * 215000;
+    cashEl.textContent = '$' + cash.toLocaleString('en-US');
+  }
+
+  /* --- compose dynamic low-res frame --- */
+  dg.clearRect(0, 0, MW, MH);
+  dg.drawImage(mapCv, 0, 0);
+
+  // routes + planes (drawn thrice for date-line wrap)
+  for (const r of routes) {
+    if (playing) {
+      r.plane += r.speed * dt * r.dir;
+      if (r.plane > 1) { r.plane = 1; r.dir = -1; }
+      if (r.plane < 0) { r.plane = 0; r.dir = 1; }
+    }
+    const age = now - r.born;
+    const reveal = Math.min(1, age / 1.6);
+    for (const off of [-MW, 0, MW]) {
+      dg.save(); dg.translate(off, 0);
+      dg.strokeStyle = age < 4 ? 'rgba(255,226,122,0.95)' : 'rgba(140,220,255,0.5)';
+      dg.lineWidth = 1;
+      dg.beginPath();
+      for (let s = 0; s <= 24 * reveal; s++) {
+        const p = qbez(r, s / 24);
+        s === 0 ? dg.moveTo(p.x, p.y) : dg.lineTo(p.x, p.y);
+      }
+      dg.stroke();
+      if (reveal >= 1) {
+        const p = qbez(r, r.plane);
+        const p2 = qbez(r, Math.min(1, Math.max(0, r.plane + 0.02 * r.dir)));
+        const ang = Math.atan2(p2.y - p.y, p2.x - p.x);
+        dg.save(); dg.translate(p.x, p.y); dg.rotate(ang);
+        dg.fillStyle = '#ffffff';
+        dg.fillRect(-2, -1, 5, 2);          // fuselage
+        dg.fillRect(-1, -3, 2, 6);          // wings
+        dg.restore();
+      }
+      dg.restore();
+    }
+  }
+
+  // city dots — blink with the kick, Aerobiz style
+  const blink = 0.55 + 0.45 * kickPulse;
+  for (const c of CITIES) {
+    const x = Math.round(px(c.lon)), y = Math.round(py(c.lat));
+    dg.fillStyle = '#08233f'; dg.fillRect(x - 2, y - 2, 4, 4);
+    dg.fillStyle = `rgba(255,${Math.round(200 + 55 * blink)},${Math.round(120 + 100 * blink)},${blink})`;
+    dg.fillRect(x - 1, y - 1, 3, 3);
+  }
+
+  // melody pings — expanding pixel squares
+  for (let i = pings.length - 1; i >= 0; i--) {
+    const p = pings[i];
+    const age = now - p.born;
+    if (age > 1.1) { pings.splice(i, 1); continue; }
+    const k = age / 1.1;
+    const rr = Math.round(2 + k * 9);
+    dg.strokeStyle = `rgba(255,240,160,${(1 - k) * 0.9})`;
+    dg.lineWidth = 1;
+    dg.strokeRect(Math.round(p.x) - rr, Math.round(p.y) - rr, rr * 2, rr * 2);
+  }
+
+  /* --- blit, letterboxed, pixels intact --- */
+  g2d.fillStyle = '#04182e'; g2d.fillRect(0, 0, W, H);
+  const scale = Math.min(W / MW, H / MH) * 0.94;
+  const dw = MW * scale, dh = MH * scale;
+  g2d.imageSmoothingEnabled = false;
+  g2d.drawImage(dynCv, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  // map frame
+  g2d.strokeStyle = '#e8ecf8'; g2d.lineWidth = 3;
+  g2d.strokeRect((W - dw) / 2 - 3, (H - dh) / 2 - 3, dw + 6, dh + 6);
+}
+draw();
+</script>
+</body>
+</html>

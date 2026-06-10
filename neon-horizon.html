@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Horizon — synthwave</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0b0418; overflow: hidden;
+    font-family: 'Arial Black', 'Segoe UI', sans-serif; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #crt { position: fixed; inset: 0; pointer-events: none; z-index: 3;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.10) 0px, rgba(0,0,0,0.10) 1px, transparent 2px, transparent 5px); }
+  #ui { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 22px; z-index: 4; text-align: center; transition: opacity 1s ease; }
+  #title {
+    font-size: clamp(38px, 8vw, 88px); font-style: italic; letter-spacing: 0.06em;
+    background: linear-gradient(180deg, #fff6c8 0%, #ffd34d 38%, #b8336a 52%, #ff4da6 60%, #fff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 18px rgba(255,77,166,0.55)) drop-shadow(0 3px 0 rgba(60,0,80,0.8));
+    text-transform: uppercase;
+  }
+  #subtitle { font-family: 'Courier New', monospace; font-size: clamp(12px, 2vw, 15px);
+    color: #6ef3ff; letter-spacing: 0.5em; text-transform: uppercase;
+    text-shadow: 0 0 12px rgba(110,243,255,0.8); }
+  #playBtn {
+    cursor: pointer; margin-top: 14px; font-family: 'Courier New', monospace; font-weight: bold;
+    font-size: 16px; letter-spacing: 0.35em; text-transform: uppercase; color: #ff9ad2;
+    padding: 14px 44px; border: 2px solid #ff4da6; border-radius: 4px;
+    background: rgba(255,77,166,0.08); text-shadow: 0 0 10px rgba(255,77,166,0.9);
+    box-shadow: 0 0 22px rgba(255,77,166,0.35), inset 0 0 18px rgba(255,77,166,0.12);
+    transition: all .25s ease;
+  }
+  #playBtn:hover { color: #fff; box-shadow: 0 0 40px rgba(255,77,166,0.7), inset 0 0 26px rgba(255,77,166,0.25); }
+  #hint { font-family: 'Courier New', monospace; font-size: 11px; color: #8d7fc7;
+    letter-spacing: 0.3em; text-transform: uppercase; }
+  #hud { position: fixed; left: 0; right: 0; bottom: 20px; display: flex; flex-direction: column;
+    align-items: center; gap: 9px; z-index: 2; opacity: 0; transition: opacity 1.4s ease; pointer-events: none; }
+  #section { font-family: 'Courier New', monospace; font-size: 12px; letter-spacing: 0.55em;
+    text-transform: uppercase; color: #6ef3ff; text-shadow: 0 0 10px rgba(110,243,255,0.8); }
+  #bar { width: min(380px, 64vw); height: 3px; background: rgba(255,77,166,0.18); border-radius: 3px; overflow: hidden; }
+  #barFill { height: 100%; width: 0%; background: linear-gradient(90deg, #ff4da6, #6ef3ff); box-shadow: 0 0 8px rgba(255,77,166,0.8); }
+  body.playing #ui { opacity: 0; pointer-events: none; }
+  body.playing #hud { opacity: 1; }
+  #pauseHit { position: fixed; inset: 0; display: none; z-index: 1; }
+  body.playing #pauseHit { display: block; }
+  #nav { position: fixed; top: 16px; right: 20px; z-index: 5; display: flex; gap: 10px; }
+  #nav a { font-family: 'Courier New', monospace; color: #8d7fc7; text-decoration: none;
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; padding: 7px 12px;
+    border: 1px solid rgba(141,127,199,0.4); border-radius: 3px; background: rgba(11,4,24,0.55);
+    transition: all .25s ease; }
+  #nav a:hover { color: #6ef3ff; border-color: #6ef3ff; text-shadow: 0 0 8px rgba(110,243,255,0.8); }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="crt"></div>
+<div id="pauseHit"></div>
+<div id="nav">
+  <a href="skyways.html">&#9666; skyways '55</a>
+  <a href="afterglow.html">afterglow &#9656;</a>
+</div>
+<div id="ui">
+  <div id="title">Neon Horizon</div>
+  <div id="subtitle">drive into the sunset &middot; 1984</div>
+  <div id="playBtn">&#9658; Ignition</div>
+  <div id="hint">tap anywhere to pause &middot; space toggles</div>
+</div>
+<div id="hud">
+  <div id="section">dusk</div>
+  <div id="bar"><div id="barFill"></div></div>
+</div>
+
+<script>
+/* =====================================================================
+   NEON HORIZON — 80s synthwave loop over a retro outrun sunset.
+   104 BPM · Am G F Em / E · 32 bars (~74 s) · seamless
+   ===================================================================== */
+
+const BPM = 104, SPB = 60 / BPM, LOOP_BARS = 32, LOOP_BEATS = LOOP_BARS * 4;
+const LOOP_SECONDS = LOOP_BEATS * SPB;
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+/* ------------------------- THE SCORE ------------------------------ */
+// 8-bar progression: Am | F | G | Em | Am | F | G | E
+const BARS = [
+  { root: 33, pad: [57, 60, 64, 69] },  // Am
+  { root: 29, pad: [53, 57, 60, 65] },  // F
+  { root: 31, pad: [55, 59, 62, 67] },  // G
+  { root: 28, pad: [52, 55, 59, 64] },  // Em
+  { root: 33, pad: [57, 60, 64, 69] },  // Am
+  { root: 29, pad: [53, 57, 60, 65] },  // F
+  { root: 31, pad: [55, 59, 62, 67] },  // G
+  { root: 28, pad: [52, 56, 59, 64] },  // E major — the 80s drama chord
+];
+
+const MELODY_A = [
+  { t: 0, n: 76, d: 1.5 }, { t: 1.5, n: 72, d: .5 }, { t: 2, n: 71, d: .5 }, { t: 2.5, n: 69, d: 1.5 },
+  { t: 4, n: 72, d: 1.5 }, { t: 5.5, n: 74, d: .5 }, { t: 6, n: 72, d: .5 }, { t: 6.5, n: 69, d: 1.5 },
+  { t: 8, n: 71, d: 1.5 }, { t: 9.5, n: 74, d: .5 }, { t: 10, n: 79, d: 1 }, { t: 11, n: 74, d: 1 },
+  { t: 12, n: 71, d: 2 }, { t: 14, n: 67, d: 1 }, { t: 15, n: 69, d: 1 },
+  { t: 16, n: 76, d: 1.5 }, { t: 17.5, n: 72, d: .5 }, { t: 18, n: 71, d: .5 }, { t: 18.5, n: 69, d: 1.5 },
+  { t: 20, n: 72, d: 1 }, { t: 21, n: 74, d: 1 }, { t: 22, n: 76, d: 2 },
+  { t: 24, n: 74, d: 1.5 }, { t: 25.5, n: 71, d: .5 }, { t: 26, n: 69, d: 1 }, { t: 27, n: 71, d: 1 },
+  { t: 28, n: 68, d: 2 }, { t: 30, n: 71, d: 1 }, { t: 31, n: 76, d: 1 },
+];
+const MELODY_B = [
+  { t: 0, n: 81, d: 1.5 }, { t: 1.5, n: 79, d: .5 }, { t: 2, n: 76, d: 2 },
+  { t: 4, n: 77, d: 1 }, { t: 5, n: 81, d: 1 }, { t: 6, n: 84, d: 2 },
+  { t: 8, n: 83, d: 1.5 }, { t: 9.5, n: 79, d: .5 }, { t: 10, n: 74, d: 1 }, { t: 11, n: 79, d: 1 },
+  { t: 12, n: 76, d: 1.5 }, { t: 13.5, n: 79, d: .5 }, { t: 14, n: 83, d: 2 },
+  { t: 16, n: 84, d: 1.5 }, { t: 17.5, n: 83, d: .5 }, { t: 18, n: 81, d: 2 },
+  { t: 20, n: 77, d: 1 }, { t: 21, n: 79, d: 1 }, { t: 22, n: 81, d: 2 },
+  { t: 24, n: 83, d: 1 }, { t: 25, n: 81, d: .5 }, { t: 25.5, n: 79, d: .5 }, { t: 26, n: 74, d: 2 },
+  { t: 28, n: 80, d: 1.5 }, { t: 29.5, n: 83, d: 1 }, { t: 30.5, n: 76, d: 1.5 },
+];
+// starlight section: long echoing tones
+const MELODY_C = [
+  { t: 0, n: 76, d: 3 }, { t: 4, n: 72, d: 3 }, { t: 8, n: 74, d: 3 }, { t: 12, n: 71, d: 3 },
+  { t: 16, n: 69, d: 3 }, { t: 20, n: 72, d: 3 }, { t: 24, n: 74, d: 1.5 }, { t: 26, n: 76, d: 2 },
+  { t: 28, n: 68, d: 2 }, { t: 30, n: 71, d: 2 },
+];
+
+function buildScore() {
+  const ev = [];
+  const push = (t, type, o) => ev.push(Object.assign({ t, type }, o));
+
+  for (let bar = 0; bar < LOOP_BARS; bar++) {
+    const t0 = bar * 4;
+    const b = BARS[bar % 8];
+    const section = Math.floor(bar / 8);  // 0 dusk 1 drive 2 overdrive 3 starlight
+
+    /* pads every bar, pumping */
+    push(t0, 'pad', { ns: b.pad, d: 4.1, v: section === 2 ? .14 : .12 });
+
+    /* 16th arpeggio plucks: r-5-oct-5 */
+    const base = b.root + 24;
+    const seq = [base, base + 7, base + 12, base + 7];
+    for (let s = 0; s < 16; s++) {
+      const v = (s % 4 === 0 ? .34 : .22) * (section === 3 ? .65 : 1);
+      push(t0 + s * 0.25, 'pluck', { n: seq[s % 4], v });
+    }
+
+    /* driving 8th bass (sections 1-2; sustained in 3) */
+    if (section === 1 || section === 2) {
+      for (let s = 0; s < 8; s++) {
+        const oct = section === 2 && (s === 3 || s === 7);
+        push(t0 + s * 0.5, 'bass', { n: oct ? b.root + 12 : b.root, d: .48, v: s % 2 ? .5 : .42 });
+      }
+    } else if (section === 3) {
+      push(t0, 'bass', { n: b.root, d: 3.8, v: .4 });
+    }
+
+    /* drums */
+    if (section === 1 || section === 2) {
+      for (let k = 0; k < 4; k++) push(t0 + k, 'kick', { v: k === 0 ? .95 : .85 });
+      push(t0 + 1, 'gsnare', { v: .8 });
+      push(t0 + 3, 'gsnare', { v: .8 });
+      const step = section === 2 ? 0.25 : 0.5;
+      for (let h = step; h < 4; h += step)
+        if (h % 1 !== 0) push(t0 + h, 'hat', { v: h % 0.5 === 0 ? .2 : .1 });
+    } else if (section === 0 && bar >= 4) {
+      for (let k = 0; k < 4; k++) push(t0 + k, 'kick', { v: .5 });
+    } else if (section === 3) {
+      push(t0, 'kick', { v: .6 }); push(t0 + 2, 'kick', { v: .5 });
+      push(t0 + 2, 'gsnare', { v: .45 });
+      if (bar === 31) [3, 3.25, 3.5, 3.75].forEach((tt, i) => push(t0 + tt, 'gsnare', { v: .3 + i * .12 }));
+    }
+
+    /* lead melodies */
+    if (bar % 8 === 0) {
+      const mel = section === 1 ? MELODY_A : section === 2 ? MELODY_B : section === 3 ? MELODY_C : null;
+      if (mel) for (const e of mel)
+        push(t0 + e.t, 'lead', { n: e.n, d: e.d, v: section === 3 ? .5 : section === 2 ? .85 : .75 });
+    }
+
+    /* noise risers into the section changes */
+    if (bar === 6) push(t0, 'riser', { d: 8 });
+    if (bar === 22) push(t0, 'riser', { d: 8 });
+    if (bar === 30) push(t0, 'riser', { d: 8 });
+  }
+
+  ev.sort((a, b2) => a.t - b2.t);
+  return ev;
+}
+
+const SCORE = buildScore();
+const SECTION_NAMES = ['dusk', 'drive', 'overdrive', 'starlight'];
+
+/* ----------------------- AUDIO ENGINE ----------------------------- */
+let ctx = null, master, comp, reverb, reverbGain, echo;
+let playing = false, startTime = 0, nextIdx = 0, loopOffset = 0, loopsDone = 0;
+let schedTimer = null;
+const visualQueue = [];
+
+function makeImpulse(c, seconds, decay) {
+  const rate = c.sampleRate, len = rate * seconds;
+  const buf = c.createBuffer(2, len, rate);
+  for (let chn = 0; chn < 2; chn++) {
+    const d = buf.getChannelData(chn);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
+function initAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.knee.value = 18; comp.ratio.value = 5;
+  master = ctx.createGain(); master.gain.value = 0.78;
+  master.connect(comp); comp.connect(ctx.destination);
+
+  reverb = ctx.createConvolver(); reverb.buffer = makeImpulse(ctx, 2.2, 2.6);
+  reverbGain = ctx.createGain(); reverbGain.gain.value = 0.32;
+  reverb.connect(reverbGain); reverbGain.connect(master);
+
+  echo = ctx.createDelay(2); echo.delayTime.value = SPB * 0.75;
+  const fb = ctx.createGain(); fb.gain.value = 0.34;
+  const wet = ctx.createGain(); wet.gain.value = 0.22;
+  echo.connect(fb); fb.connect(echo);
+  echo.connect(wet); wet.connect(master);
+}
+
+function send(node, dry, wet) {
+  const g1 = ctx.createGain(); g1.gain.value = dry; node.connect(g1); g1.connect(master);
+  const g2 = ctx.createGain(); g2.gain.value = wet; node.connect(g2); g2.connect(reverb);
+}
+
+/* lush pumping pad — saws with a beat-rate sidechain LFO */
+function pad(when, midis, durBeats, vel) {
+  const len = durBeats * SPB;
+  const bus = ctx.createGain();
+  bus.gain.setValueAtTime(0, when);
+  bus.gain.linearRampToValueAtTime(1, when + 0.45);
+  bus.gain.setValueAtTime(1, when + len - 0.2);
+  bus.gain.linearRampToValueAtTime(0, when + len + 0.3);
+
+  const pump = ctx.createGain(); pump.gain.value = 0.7;
+  const lfo = ctx.createOscillator(); lfo.type = 'sawtooth'; lfo.frequency.value = 1 / SPB;
+  const lg = ctx.createGain(); lg.gain.value = 0.28;
+  lfo.connect(lg); lg.connect(pump.gain);
+  bus.connect(pump); send(pump, 0.55, 0.5);
+  lfo.start(when); lfo.stop(when + len + 0.4);
+
+  for (const m of midis) {
+    const f = mtof(m);
+    for (const det of [-7, 7]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1300; lp.Q.value = 0.5;
+      const g = ctx.createGain(); g.gain.value = vel / midis.length;
+      o.connect(lp); lp.connect(g); g.connect(bus);
+      o.start(when); o.stop(when + len + 0.4);
+    }
+  }
+}
+
+function bass(when, midi, durBeats, vel) {
+  const f = mtof(midi);
+  const len = durBeats * SPB;
+  const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = f;
+  const g2 = ctx.createGain(); g2.gain.value = 0.4; o2.connect(g2);
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 3;
+  lp.frequency.setValueAtTime(900, when);
+  lp.frequency.exponentialRampToValueAtTime(220, when + Math.min(0.25, len));
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(vel, when + 0.008);
+  g.gain.setValueAtTime(vel * 0.75, when + len * 0.7);
+  g.gain.linearRampToValueAtTime(0, when + len);
+  o.connect(lp); g2.connect(lp); lp.connect(g); send(g, 1, 0.03);
+  o.start(when); o.stop(when + len + 0.05);
+  o2.start(when); o2.stop(when + len + 0.05);
+}
+
+function pluck(when, midi, vel) {
+  const f = mtof(midi);
+  const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vel * 0.3, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.16);
+  o.connect(lp); lp.connect(g); send(g, 0.7, 0.25);
+  o.start(when); o.stop(when + 0.2);
+}
+
+function lead(when, midi, durBeats, vel) {
+  const f = mtof(midi);
+  const len = durBeats * SPB;
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0, when);
+  out.gain.linearRampToValueAtTime(vel * 0.3, when + 0.025);
+  out.gain.setValueAtTime(vel * 0.27, when + Math.max(0.05, len - 0.08));
+  out.gain.linearRampToValueAtTime(0, when + len + 0.05);
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3400; lp.Q.value = 0.8;
+  lp.connect(out);
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 5.4;
+  const lg = ctx.createGain();
+  lg.gain.setValueAtTime(0, when);
+  lg.gain.setValueAtTime(0, when + 0.18);
+  lg.gain.linearRampToValueAtTime(11, when + 0.45);
+  lfo.connect(lg);
+  for (const det of [-9, 9]) {
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+    lg.connect(o.detune);
+    o.connect(lp);
+    o.start(when); o.stop(when + len + 0.1);
+  }
+  lfo.start(when); lfo.stop(when + len + 0.1);
+  send(out, 0.6, 0.25); out.connect(echo);
+}
+
+function kick(when, vel) {
+  const o = ctx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(140, when);
+  o.frequency.exponentialRampToValueAtTime(42, when + 0.1);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vel, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.26);
+  o.connect(g); send(g, 1, 0.04);
+  o.start(when); o.stop(when + 0.3);
+}
+
+/* the big 80s gated-reverb snare */
+function gsnare(when, vel) {
+  const len = ctx.sampleRate * 0.25;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.2);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.6;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vel, when);
+  g.gain.setValueAtTime(vel * 0.85, when + 0.11);
+  g.gain.linearRampToValueAtTime(0, when + 0.14);   // hard gate
+  s.connect(bp); bp.connect(g); send(g, 0.55, 0.85);
+  const t = ctx.createOscillator(); t.type = 'triangle'; t.frequency.value = 190;
+  const tg = ctx.createGain();
+  tg.gain.setValueAtTime(vel * 0.5, when);
+  tg.gain.exponentialRampToValueAtTime(0.0001, when + 0.09);
+  t.connect(tg); send(tg, 0.8, 0.2);
+  s.start(when); t.start(when); t.stop(when + 0.12);
+}
+
+function hat(when, vel) {
+  const len = ctx.sampleRate * 0.045;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
+  const s = ctx.createBufferSource(); s.buffer = buf;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 8800;
+  const g = ctx.createGain(); g.gain.value = vel;
+  s.connect(hp); hp.connect(g); send(g, 0.8, 0.12);
+  s.start(when);
+}
+
+function riser(when, durBeats) {
+  const len = durBeats * SPB;
+  const n = ctx.createBufferSource();
+  const buf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  n.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4;
+  bp.frequency.setValueAtTime(280, when);
+  bp.frequency.exponentialRampToValueAtTime(4200, when + len);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.001, when);
+  g.gain.exponentialRampToValueAtTime(0.14, when + len);
+  g.gain.linearRampToValueAtTime(0, when + len + 0.05);
+  n.connect(bp); bp.connect(g); send(g, 0.5, 0.6);
+  n.start(when);
+}
+
+function scheduler() {
+  const horizon = ctx.currentTime + 0.18;
+  while (true) {
+    const evt = SCORE[nextIdx];
+    const when = startTime + loopOffset + evt.t * SPB;
+    if (when > horizon) break;
+    fire(evt, when);
+    nextIdx++;
+    if (nextIdx >= SCORE.length) { nextIdx = 0; loopOffset += LOOP_SECONDS; loopsDone++; }
+  }
+}
+
+function fire(e, when) {
+  switch (e.type) {
+    case 'pad':    pad(when, e.ns, e.d, e.v); break;
+    case 'pluck':  pluck(when, e.n, e.v); break;
+    case 'bass':   bass(when, e.n, e.d, e.v); break;
+    case 'lead':   lead(when, e.n, e.d, e.v); visualQueue.push({ when, kind: 'streak', n: e.n }); break;
+    case 'kick':   kick(when, e.v); visualQueue.push({ when, kind: 'kick' }); break;
+    case 'gsnare': gsnare(when, e.v); break;
+    case 'hat':    hat(when, e.v); break;
+    case 'riser':  riser(when, e.d); break;
+  }
+}
+
+function play() {
+  if (!ctx) initAudio();
+  ctx.resume();
+  playing = true;
+  startTime = ctx.currentTime + 0.1;
+  nextIdx = 0; loopOffset = 0; loopsDone = 0;
+  schedTimer = setInterval(scheduler, 30);
+  document.body.classList.add('playing');
+}
+function stop() {
+  playing = false;
+  clearInterval(schedTimer);
+  if (ctx) ctx.suspend();
+  document.body.classList.remove('playing');
+}
+document.getElementById('playBtn').addEventListener('click', e => { e.stopPropagation(); play(); });
+document.getElementById('pauseHit').addEventListener('click', () => stop());
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); playing ? stop() : play(); }
+});
+
+/* ------------------------- VISUALS: THE SUNSET --------------------- */
+const cv = document.getElementById('scene');
+const g = cv.getContext('2d');
+let W, H, HY;   // HY = horizon line
+function resize() {
+  W = cv.width = innerWidth * devicePixelRatio;
+  H = cv.height = innerHeight * devicePixelRatio;
+  HY = H * 0.62;
+}
+addEventListener('resize', resize); resize();
+
+const stars = Array.from({ length: 130 }, () => ({
+  x: Math.random(), y: Math.random() * 0.5,
+  r: Math.random() * 1.3 + 0.4, tw: Math.random() * Math.PI * 2, sp: 0.4 + Math.random() * 1.4,
+}));
+// deterministic mountain ridges (computed once)
+function ridge(n, seed, amp) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const r1 = Math.sin(i * 12.9898 + seed) * 43758.5453;
+    const h = (r1 - Math.floor(r1));
+    pts.push(h * amp + Math.sin(i * 0.9 + seed) * amp * 0.4);
+  }
+  return pts;
+}
+const RIDGE_FAR = ridge(26, 7, 0.06);
+const RIDGE_NEAR = ridge(18, 31, 0.045);
+
+const streaks = [];   // shooting stars on melody notes
+let kickPulse = 0;
+
+function drainVisuals(now) {
+  for (let i = visualQueue.length - 1; i >= 0; i--) {
+    const v = visualQueue[i];
+    if (v.when <= now) {
+      if (v.kind === 'kick') kickPulse = 1;
+      else if (v.kind === 'streak') {
+        const fromLeft = Math.random() < 0.5;
+        streaks.push({
+          born: now,
+          x: fromLeft ? Math.random() * 0.3 : 0.7 + Math.random() * 0.3,
+          y: Math.random() * 0.28 + 0.04,
+          vx: fromLeft ? 0.10 + Math.random() * 0.06 : -(0.10 + Math.random() * 0.06),
+          vy: 0.035 + Math.random() * 0.025,
+          hue: 300 + ((v.n || 76) - 67) * 4,
+        });
+      }
+      visualQueue.splice(i, 1);
+    }
+  }
+}
+
+function drawPalm(x, baseY, h, lean) {
+  g.save();
+  g.translate(x, baseY);
+  g.fillStyle = '#070210'; g.strokeStyle = '#070210';
+  // curved trunk built from shrinking discs
+  const segs = 22;
+  let tx = 0, ty = 0;
+  for (let i = 0; i <= segs; i++) {
+    const k = i / segs;
+    tx = lean * h * 0.28 * k * k;
+    ty = -h * k;
+    const r = h * 0.022 * (1 - k * 0.55);
+    g.beginPath(); g.arc(tx, ty, r, 0, 7); g.fill();
+  }
+  // fronds
+  const topX = tx, topY = ty;
+  for (let i = 0; i < 9; i++) {
+    const a = -Math.PI * 0.95 + (i / 8) * Math.PI * 0.9 + lean * 0.15;
+    const fl = h * (0.34 + (i % 3) * 0.05);
+    const ex = topX + Math.cos(a) * fl;
+    const ey = topY + Math.sin(a) * fl * 0.55 + fl * 0.30;
+    const cx2 = topX + Math.cos(a) * fl * 0.55;
+    const cy2 = topY + Math.sin(a) * fl * 0.62 - fl * 0.18;
+    g.lineWidth = h * 0.016; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(topX, topY); g.quadraticCurveTo(cx2, cy2, ex, ey); g.stroke();
+    g.lineWidth = h * 0.007;
+    g.beginPath(); g.moveTo(topX, topY); g.quadraticCurveTo(cx2, cy2 + fl * 0.08, ex, ey + fl * 0.06); g.stroke();
+  }
+  g.restore();
+}
+
+const secEl = document.getElementById('section');
+const fillEl = document.getElementById('barFill');
+
+function draw() {
+  requestAnimationFrame(draw);
+  const now = ctx ? ctx.currentTime : 0;
+  const t = performance.now() / 1000;
+  if (playing) drainVisuals(now);
+  kickPulse *= 0.92;
+
+  let beatPos = 0;
+  if (playing && ctx) {
+    const pos = ((now - startTime) % LOOP_SECONDS + LOOP_SECONDS) % LOOP_SECONDS;
+    beatPos = Math.max(0, pos / SPB);
+    const frac = pos / LOOP_SECONDS;
+    fillEl.style.width = (frac * 100).toFixed(1) + '%';
+    secEl.textContent = SECTION_NAMES[Math.min(3, Math.floor(frac * 4))];
+  } else {
+    beatPos = t / SPB * 0.3;   // grid idles slowly before play
+  }
+
+  /* sky */
+  const sky = g.createLinearGradient(0, 0, 0, HY);
+  sky.addColorStop(0, '#0d0322');
+  sky.addColorStop(0.45, '#2b0a4e');
+  sky.addColorStop(0.75, '#7a1660');
+  sky.addColorStop(1, '#ff5a3c');
+  g.fillStyle = sky; g.fillRect(0, 0, W, HY);
+
+  /* stars */
+  g.save();
+  for (const s of stars) {
+    g.globalAlpha = 0.25 + 0.55 * Math.abs(Math.sin(s.tw + t * s.sp));
+    g.fillStyle = '#ffe7f5';
+    g.beginPath(); g.arc(s.x * W, s.y * H, s.r * devicePixelRatio, 0, 7); g.fill();
+  }
+  g.restore();
+
+  /* shooting streaks on melody notes */
+  g.save(); g.globalCompositeOperation = 'lighter';
+  for (let i = streaks.length - 1; i >= 0; i--) {
+    const st = streaks[i];
+    const age = now - st.born;
+    if (age > 1.3) { streaks.splice(i, 1); continue; }
+    const k = age / 1.3;
+    const x = (st.x + st.vx * age) * W, y = (st.y + st.vy * age) * H;
+    const tail = 0.07 * W;
+    const grad = g.createLinearGradient(x - st.vx * tail * 8, y - st.vy * tail * 8, x, y);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(1, `hsla(${st.hue}, 90%, 75%, ${(1 - k) * 0.9})`);
+    g.strokeStyle = grad; g.lineWidth = 2 * devicePixelRatio; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(x - st.vx * tail * 8, y - st.vy * tail * 8);
+    g.lineTo(x, y); g.stroke();
+  }
+  g.restore();
+
+  /* the sun — striped, glowing, pulsing with the kick */
+  const sunR = Math.min(W, H) * 0.17;
+  const sx = W / 2, sy = HY - sunR * 0.18;
+  const glow = g.createRadialGradient(sx, sy, sunR * 0.3, sx, sy, sunR * (3 + kickPulse));
+  glow.addColorStop(0, `rgba(255,120,90,${0.4 + kickPulse * 0.25})`);
+  glow.addColorStop(0.5, 'rgba(255,60,140,0.12)');
+  glow.addColorStop(1, 'rgba(255,60,140,0)');
+  g.fillStyle = glow;
+  g.fillRect(sx - sunR * 4, sy - sunR * 4, sunR * 8, sunR * 8);
+
+  g.save();
+  g.beginPath(); g.arc(sx, sy, sunR, 0, 7); g.clip();
+  const sun = g.createLinearGradient(0, sy - sunR, 0, sy + sunR);
+  sun.addColorStop(0, '#fff3a8');
+  sun.addColorStop(0.45, '#ffce4d');
+  sun.addColorStop(0.75, '#ff7a4d');
+  sun.addColorStop(1, '#ff3d9e');
+  g.fillStyle = sun;
+  g.fillRect(sx - sunR, sy - sunR, sunR * 2, sunR * 2);
+  // drifting horizontal stripe cutouts, thicker toward the bottom
+  g.fillStyle = 'rgba(43,10,78,0.95)';
+  const driftOff = (t * 3 * devicePixelRatio) % (sunR * 0.3);
+  for (let i = 0; i < 9; i++) {
+    const yy = sy - sunR * 0.15 + i * sunR * 0.14 + driftOff * (i / 9);
+    const hh = (1 + i * 1.15) * devicePixelRatio;
+    if (yy < sy + sunR) g.fillRect(sx - sunR, yy, sunR * 2, hh);
+  }
+  g.restore();
+
+  /* mountains */
+  const drawRidge = (pts, color, yBase, span) => {
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(0, HY + 1);
+    pts.forEach((h, i) => g.lineTo(i / (pts.length - 1) * W, HY - h * H * span - yBase * H));
+    g.lineTo(W, HY + 1); g.closePath(); g.fill();
+  };
+  drawRidge(RIDGE_FAR, '#240a3d', 0.0, 1.0);
+  drawRidge(RIDGE_NEAR, '#160526', -0.005, 0.8);
+
+  /* the grid floor */
+  const floor = g.createLinearGradient(0, HY, 0, H);
+  floor.addColorStop(0, '#1c0533');
+  floor.addColorStop(1, '#08020f');
+  g.fillStyle = floor; g.fillRect(0, HY, W, H - HY);
+
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  const bright = 0.45 + kickPulse * 0.5;
+  // horizontal lines scrolling toward the viewer, synced to the beat
+  const off = (beatPos * 0.5) % 1;
+  const rows = 22;
+  for (let i = 0; i < rows; i++) {
+    const zu = (i + off) / rows;
+    const y = HY + (H - HY) * Math.pow(zu, 2.6);
+    const a = (0.12 + zu * 0.55) * bright;
+    g.strokeStyle = `rgba(255,77,166,${a})`;
+    g.lineWidth = (1 + zu * 2) * devicePixelRatio;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+  }
+  // converging verticals
+  for (let i = -10; i <= 10; i++) {
+    const xb = W / 2 + (i / 10) * W * 0.95;
+    const xt = W / 2 + (i / 10) * W * 0.04;
+    const a = (0.10 + Math.abs(i) / 10 * 0.10) * bright;
+    g.strokeStyle = `rgba(110,243,255,${a})`;
+    g.lineWidth = 1 * devicePixelRatio;
+    g.beginPath(); g.moveTo(xt, HY); g.lineTo(xb, H); g.stroke();
+  }
+  // horizon glow line
+  g.strokeStyle = `rgba(255,210,240,${0.5 + kickPulse * 0.4})`;
+  g.lineWidth = 2 * devicePixelRatio;
+  g.beginPath(); g.moveTo(0, HY); g.lineTo(W, HY); g.stroke();
+  g.restore();
+
+  /* palm silhouettes */
+  drawPalm(W * 0.10, H * 0.96, H * 0.34, 0.7);
+  drawPalm(W * 0.91, H * 0.985, H * 0.40, -0.6);
+
+  /* vignette */
+  const vg = g.createRadialGradient(W / 2, H * 0.55, H * 0.3, W / 2, H * 0.55, H * 0.95);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(2,0,8,0.55)');
+  g.fillStyle = vg; g.fillRect(0, 0, W, H);
+}
+draw();
+</script>
+</body>
+</html>
